@@ -5,43 +5,66 @@ import threading
 import sys
 
 class ServerThread(threading.Thread):
-	def __init__(self, client):                        # constructor for ServerThread obj!!
-		threading.Thread.__init__(self)                # constructs parent class Thread
+	def __init__(self, client, server):
+		threading.Thread.__init__(self)
 		self.client = client
-
+		self.server = server
+		
 	def run(self):
-		connectionSocket, addr = self.client           # creates new socket specifically for client
-		sentence = connectionSocket.recv(1024)
-		
-        # TODO
-
-		connectionSocket.close()
-
-class ServerMain:
-	def parse_file(path):
-		# UserInfo.txt file formatted as user_name:password
-		# TODO:
-		# 1) read all .txt data into memory
-		# 2) authenticate new clients using said data
-		# maintain list of players in each room (?)
-
-
-	def server_run(self):
-		# usage: python3 GameServer.py [port] [UserInfo.txt path]
-		serverPort = sys.argv[1]
-		
-		parse_file(sys.argv[2])
-		
-		serverSocket = socket(AF_INET, SOCK_STREAM)    # creates socket (reused)
-		serverSocket.bind(("", serverPort))            # associates socket obj with server IP addr and port #
-		serverSocket.listen(5)                         # prepares incoming queue
+		connectionSocket, addr = self.client
 		
 		while True:
-			client = serverSocket.accept()             # ready for client connection, blocked until connect() request received
-			t = ServerThread(client)
+			message = connectionSocket.recv(1024).decode().split()
+			command = message[0]
+			if command == "/login":
+				username, pwd = message[1], message[2]
+				if self.server.userInfo.get(username) == pwd:
+					connectionSocket.send(("1001 Authentication successful")
+						   .encode())
+					
+					# TODO
+					# enter game hall
+
+				else:
+					connectionSocket.send(("1002 Authentication failed")
+						   .encode())
+		
+		connectionSocket.close()
+
+
+class ServerMain:
+	def __init__(self):
+		self.userInfo = {}
+		
+	def parse_file(self, path):
+		# parses and stores UserInfo.txt data
+		# line format is user_name:password
+		
+		with open(path, "r") as f:
+			for line in f:
+				line = line.strip()
+				username, password = line.split(":", 1)
+				self.userInfo[username] = password
+
+	def server_run(self):
+		serverPort = int(sys.argv[1])
+		self.parse_file(sys.argv[2])
+		
+		serverSocket = socket(AF_INET, SOCK_STREAM)
+		serverSocket.bind(("", serverPort))
+		serverSocket.listen(5)
+		
+		while True:
+			client = serverSocket.accept()
+			t = ServerThread(client, self)
 			t.start()
 
 
 if __name__ == '__main__':
+	if len(sys.argv) != 3:
+			print("Usage: GameServer.py [port] [UserInfo.txt path]")
+			sys.exit(1)
+			
 	server = ServerMain()
 	server.server_run()
+	
