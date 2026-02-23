@@ -30,9 +30,10 @@ def main():
     while not authenticate_user(clientSocket):
         pass
 
-
-    # TODO
-
+    # game hall successfully entered
+    while True:
+        clientSocket.send((input()).encode())
+        print(clientSocket.recv(1024).decode())
 
 
 
