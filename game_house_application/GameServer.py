@@ -9,72 +9,68 @@ TOTAL_ROOMS = 7
 class ServerThread(threading.Thread):
 	def __init__(self, client, server):
 		threading.Thread.__init__(self)
+		self.playerID = ""
 		self.client = client
 		self.server = server
-	
-	def attempt_entry(self, room):
-		pass
-	
-	def update_room(self, room):
-		# checks if game start qualifications are met
-		# returns status for specified room
-		# TODO: locking thread??
-		
-		if all(self.server.players[room].values()) and \
-			len(self.server.players[room]) >= 2:
-			self.server.roomStatus[room] = "playing"
-		else:
-			self.server.roomStatus[room] = "available"
-		
-		return self.server.roomStatus[room]
-	
+
 	def run(self):
 		connectionSocket, addr = self.client
 		authenticated = False
-		
 		try:
 			while True:
 				clientQuery = connectionSocket.recv(1024).decode().split()      # TODO if client disconnects?
 				command = clientQuery[0]
-				
+
 				if command == "/login":
+					if authenticated:
+						connectionSocket.send(("User already logged in.")
+							.encode())
+						continue
+					
 					username, pwd = clientQuery[1], clientQuery[2]
 					if self.server.userInfo.get(username) == pwd:
+						self.playerID = username
 						connectionSocket.send(("1001 Authentication successful")
 							.encode())
+						print("New user", self.playerID, "logged in!")
 						authenticated = True    # player enters game hall
 					else:
 						connectionSocket.send(("1002 Authentication failed")
 							.encode())
+						print("Failed login attempt.")
 					continue
-								
+
+				# game hall state actions:
 				if authenticated:
 					if command == "/list":
-						# display total rooms, as well as
-                        # number of players and status of each room
-						# TODO: locking thread?
-						roomsData = "3001 " + TOTAL_ROOMS + " "
-						for i in range(TOTAL_ROOMS):
-							roomsData = roomsData + \
-							    len(self.server.players[i + 1]) + ":" + \
-								self.server.roomStatus[i + 1] + " "
-						connectionSocket.send((roomsData).encode())
-					
+						connectionSocket.send((self.server.format_list())
+							.encode())
+
 					elif command == "/enter":
 						roomNumber = int(clientQuery[1])
-						attempt_entry(roomNumber)
-						
-						
+						if self.server.attempt_entry(roomNumber, self.playerID) \
+						    == 0:
+							connectionSocket.send((
+								"3011 In room, not ready").encode())
+							print(self.playerID + " entered room " + 
+			                    str(roomNumber) + ".")
+							print(self.server.players) # take outtttttt for debug :p
+						else:
+							connectionSocket.send((
+								"3014 The room is playing a game").encode())
+							print("Room entry rejected.")
 
 					elif command == "/ready":
 						pass
+
 					else:
 						connectionSocket.send((
-							"Invalid command. Game hall command usage:\n\n" \
+							"\nInvalid command. Game hall command usage:\n\n" \
 								"/login                 User authentication\n" \
 								"/list                  Display room info and availibility\n" \
 								"/enter [room number]   Enter specified room\n" \
-								"/ready                 User status ready for game start").encode())
+								"/ready                 User status ready for game start\n")
+								.encode())
 
 				else:
 					connectionSocket.send((
@@ -90,10 +86,45 @@ class ServerMain:
 		self.players = {}
 		self.roomStatus = {}
 		for i in range(TOTAL_ROOMS):
-			# {room number : {player name : isReady}}
+			# {room number : {player ID : isReady}}
 			self.players[i + 1] = {}
 			self.roomStatus[i + 1] = "available"
-		
+		self.lock = threading.Lock()        # TODO: locking errors / nonblock / timeout???
+
+	def attempt_entry(self, room, playerID):
+		# returns 0 if entry successful, 1 on failure (currently playing game)
+		with self.lock:
+			if self.roomStatus[room] == "available":
+				# default player state: not ready
+				self.players[room][playerID] = False
+				return 0
+			else:
+				return 1
+
+	def update_room(self, room):
+		# checks if game start qualifications are met
+		# returns status for specified room
+		with self.lock:
+			if all(self.players[room].values()) and len(self.players[room]) \
+			    >= 2:
+				self.roomStatus[room] = "playing"
+			else:
+				self.roomStatus[room] = "available"
+
+		return self.roomStatus[room]
+
+	def format_list(self):
+		# displays total rooms, as well as
+		# number of players and status of each room
+		roomsData = "3001 " + str(TOTAL_ROOMS) + " "
+		with self.lock:
+			for i in range(TOTAL_ROOMS):
+				roomsData = roomsData + \
+					str(len(self.players[i + 1])) + ":" + \
+					self.roomStatus[i + 1] + " "
+
+		return roomsData
+
 	def parse_file(self, path):
 		# UserInfo.txt line format is user_name:password
 		with open(path, "r") as f:
@@ -105,11 +136,12 @@ class ServerMain:
 	def server_run(self):
 		serverPort = int(sys.argv[1])
 		self.parse_file(sys.argv[2])
-		
+
 		serverSocket = socket(AF_INET, SOCK_STREAM)
 		serverSocket.bind(("", serverPort))
+		print("Server connected!")
 		serverSocket.listen(5)
-		
+
 		while True:
 			client = serverSocket.accept()
 			t = ServerThread(client, self)
