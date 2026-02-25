@@ -4,6 +4,7 @@ from socket import *
 import sys
 
 def authenticate_user(clientSocket):
+    # sends user input credentials to server for validation
     username = input("Please input your user name:\n")
     pwd = input("Please input your password:\n")
     clientSocket.send(("/login " + username + " " + pwd).encode())
@@ -11,11 +12,12 @@ def authenticate_user(clientSocket):
     response = clientSocket.recv(1024).decode()
     print(response)
     status = response.split()[0]
+
     if status == "1001":
         return True
     else:
         return False
-
+    
 
 def main(): 
     if len(sys.argv) != 3:
@@ -30,10 +32,25 @@ def main():
     while not authenticate_user(clientSocket):
         pass
 
-    # game hall successfully entered
+    # client in game hall
     while True:
         clientSocket.send((input()).encode())
-        print(clientSocket.recv(1024).decode())
+        serverResponse = clientSocket.recv(1024).decode()
+        print(serverResponse)
+
+        # waiting for game start
+        if serverResponse.split()[0] == "3012":
+            print(clientSocket.recv(1024).decode())                         # TODO: timeout??
+            break
+    
+    # client in auctioning state
+    clientSocket.send((input()).encode())
+    print(clientSocket.recv(1024).decode())
+
+
+
+
+
 
 
 
