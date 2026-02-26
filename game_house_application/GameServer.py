@@ -100,10 +100,9 @@ class ServerThread(threading.Thread):
                         else:
                             self.server.remove_player([self.playerID], self.room)
 
-                        print(f"Room {self.room} game ended.")
-                        self.room = 0
-
                         # TODO exit stuff
+
+                        self.room = 0
 
 
                     else:
@@ -131,11 +130,11 @@ class ServerMain:
 
         # {auction number : {player ID : bid amount}}
         self.allBids = {i: {} for i in range(6)}
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
 
 
     def remove_player(self, playerList, room):
-        # removes player(s) from their respective room
+        # removes player(s) in playerList from corresponding room
         with self.lock:
             roomMembers = self.playerStatus.get(room)
             for player in playerList:
@@ -143,7 +142,7 @@ class ServerMain:
                 self.activeUsers.pop(player)
 
             if len(self.playerStatus[room]) < 2:
-                self.roomStatus[room] = "available"
+                self.roomStatus[room] = "available"                     # disconnected idk TODO
 
 
     def submit_bid(self, playerBids, playerID, room):
@@ -156,30 +155,39 @@ class ServerMain:
 
             # if all player bids submitted, calculate winner
             if len(self.allBids.get(0)) == len(self.playerStatus.get(room)):
+                print("calculating winner")
                 wins = {player: 0 for player in self.allBids.get(0).keys()}
                 for i in range(6):
-                    current = self.allBids.get(0)
-                    winner = max(current, key=current.get)
-                    wins[winner] += 1
-                    gameWinner = max(wins, key=wins.get)                    # TODO: ties??
+                    current = self.allBids.get(i)
+                    max_bid = max(current.values())
+                    winners = [p for p, b in current.items() if b == max_bid]
+                    for winner in winners:
+                        wins[winner] += 1
 
-                # send winning / losing notifications, clear room
-                self.activeUsers.get(gameWinner).send((
-                    "3021 You are the winner").encode())
-                print(f"Winner: {gameWinner}")                              # DEBUG
+                # multiple winners if tie for overall score
+                max_win = max(wins.values())
+                gameWinners = [x for x, w in wins.items() if w == max_win]
 
-                losers = self.playerStatus.get(room).keys()
-                losers.pop(gameWinner)
+                losers = self.playerStatus.get(room).copy()
+                # send winning / losing notifications
+                for winner in gameWinners:
+                    self.activeUsers.get(winner).send((
+                        "3021 You are the winner").encode())
+                    print(f"Congrats to {winner} in room {room} :D")
+                    losers.pop(winner)
+
                 for player in losers:
                     self.activeUsers.get(player).send((
                         "3022 You lost this game").encode())
                 print(f"Losers: {losers}")                          # DEBUG
 
-                self.remove_player([gameWinner], room)
+                # clears room and resets bid data
+                self.remove_player(gameWinners, room)
                 self.remove_player(losers, room)
                 self.roomStatus[room] = "available"
-                print(f"Active users: {list(self.activeUsers)}")            # DEBUG
-                print(f"Room statuses: {list(self.roomStatus)}")               # DEBUG
+                print(f"Active users: {list(self.activeUsers)}")  # DEBUG
+                print(f"Room statuses: {self.roomStatus}")  # DEBUG
+                self.allBids = {i: {} for i in range(6)}
 
 
     def update_room(self, playerID, room):
