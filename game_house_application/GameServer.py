@@ -18,18 +18,24 @@ class ServerThread(threading.Thread):
     def authenticate_bid(self, connectionSocket):
         # checks bid input validity, returns int bid list or empty if invalid
 
-        response = connectionSocket.recv(1024).decode().split()
-        if response[0] != "/bids" or len(response) != 7:
-            connectionSocket.send(("4002 Unrecognized message").encode())
-            return []
+        try:
+            response = connectionSocket.recv(1024).decode().split()
+            if not response:
+                return [0]
 
-        response.pop(0)
-        bidList = [int(x) for x in response]
-        if sum(bidList) > 30 or any(x < 0 for x in bidList):
-            connectionSocket.send(("3022 You lost this game").encode())
-            return []
+            if response[0] != "/bids" or len(response) != 7:
+                connectionSocket.send(("4002 Unrecognized message").encode())
+                return []
 
-        return bidList
+            response.pop(0)
+            bidList = [int(x) for x in response]
+            if sum(bidList) > 30 or any(x < 0 for x in bidList):
+                connectionSocket.send(("3022 You lost this game").encode())
+                return []
+
+            return bidList
+        except Exception as e:
+            return [0]
 
 
     def run(self):
@@ -38,9 +44,13 @@ class ServerThread(threading.Thread):
 
         try:
             while True:
-                clientQuery = connectionSocket.recv(1024).decode().split()
-                command = clientQuery[0]
+                clientQuery = (connectionSocket.recv(1024)).decode().split()
+                if not clientQuery:
+                    self.server.disconnect(self.playerID, self.room)
+                    print(f"Client {addr} disconnected.")
+                    break
 
+                command = clientQuery[0]
                 if command == "/login":
                     if authenticated:
                         connectionSocket.send(("4002 Unrecognized message")
@@ -66,7 +76,7 @@ class ServerThread(threading.Thread):
                         connectionSocket.send((self.server.format_list())
                             .encode())
 
-                    elif command == "/enter":
+                    elif command == "/enter" and len(clientQuery) == 2:
                         roomNumber = int(clientQuery[1])
                         code = self.server.attempt_entry(roomNumber,
                                self.playerID, connectionSocket)
@@ -74,7 +84,7 @@ class ServerThread(threading.Thread):
                             self.room = roomNumber
                             connectionSocket.send((
                                 "3011 In room, not ready").encode())
-                            print(f"{self.playerID} entered room {str(roomNumber)}.")
+                            print(self.playerID, "entered room", roomNumber, ".")
                         elif code == 3014:
                             connectionSocket.send((
                                 "3014 The room is playing a game").encode())
@@ -89,29 +99,42 @@ class ServerThread(threading.Thread):
                                 "4002 Unrecognized message").encode())
                             continue
 
-                        self.server.update_room(self.playerID, self.room)
+                        self.server.update_player(self.playerID, self.room)
+                        self.server.update_room(self.room)
 
                         # wait for game to start
 
-                        # player enters auctioning state
+                        # player enters "playing" state
                         bidList = self.authenticate_bid(connectionSocket)
                         if bidList:
-                            self.server.submit_bid(bidList, self.playerID, self.room)
+                            self.server.submit_bid(
+                                bidList, self.playerID, self.room)
+                        elif bidList == [0]:
+                            self.server.disconnect(self.playerID, self.room)
                         else:
-                            self.server.remove_player([self.playerID], self.room)
-
-                        # TODO exit stuff
+                            self.server.remove_player(
+                                [self.playerID], self.room)
 
                         self.room = 0
 
+                    elif command == "/exit":
+                        connectionSocket.send(("4001 Bye bye").encode())
 
                     else:
                         connectionSocket.send((
                             "4002 Unrecognized message").encode())
-
                 else:
                     connectionSocket.send((
                         "4002 Unrecognized message").encode())
+
+        except (ConnectionResetError, BrokenPipeError) as e:
+            self.server.disconnect(self.playerID, self.room)
+            print(f"Connection error from client {addr}, "
+                  f" may have disconnected forcibly: {e}")
+
+        except Exception as e:
+            self.server.disconnect(self.playerID, self.room)
+            print(f"Other error occurred with client: {e}")
 
         finally:
             connectionSocket.close()
@@ -140,9 +163,7 @@ class ServerMain:
             for player in playerList:
                 roomMembers.pop(player)
                 self.activeUsers.pop(player)
-
-            if len(self.playerStatus[room]) < 2:
-                self.roomStatus[room] = "available"                     # disconnected idk TODO
+            print("after removing: ", self.playerStatus.get(room))                              # debug
 
 
     def submit_bid(self, playerBids, playerID, room):
@@ -179,26 +200,22 @@ class ServerMain:
                 for player in losers:
                     self.activeUsers.get(player).send((
                         "3022 You lost this game").encode())
-                print(f"Losers: {losers}")                          # DEBUG
+                print(f"Losers: {losers}")                                            # DEBUG
 
                 # clears room and resets bid data
                 self.remove_player(gameWinners, room)
                 self.remove_player(losers, room)
                 self.roomStatus[room] = "available"
-                print(f"Active users: {list(self.activeUsers)}")  # DEBUG
-                print(f"Room statuses: {self.roomStatus}")  # DEBUG
+                print(f"Active users: {list(self.activeUsers)}")                     # DEBUG
+                print(f"Room statuses: {self.roomStatus}")                          # DEBUG
                 self.allBids = {i: {} for i in range(6)}
 
 
-    def update_room(self, playerID, room):
-        # updates player status to ready (True),
+    def update_room(self, room):
         # checks if game start qualifications are met, and
         # notifies all room members when game begins
 
         with self.lock:
-            self.playerStatus[room][playerID] = True
-            self.activeUsers.get(playerID).send(("3012 Ready").encode())
-
             if all(self.playerStatus[room].values()) and \
                     len(self.playerStatus[room]) >= 2:
                 self.roomStatus[room] = "playing"
@@ -206,6 +223,15 @@ class ServerMain:
                 for player in self.playerStatus[room]:
                     self.activeUsers.get(player).send((
                     "3013 Game starts. Please submit your bids").encode())
+            else:
+                self.roomStatus[room] = "available"
+
+
+    def update_player(self, playerID, room):
+        # updates player status to ready (True)
+        with self.lock:
+            self.playerStatus[room][playerID] = True
+            self.activeUsers.get(playerID).send(("3012 Ready").encode())
 
 
     def attempt_entry(self, room, playerID, connectionSocket):
@@ -235,6 +261,24 @@ class ServerMain:
                     self.roomStatus[i + 1] + " "
 
         return roomsData
+
+    def disconnect(self, playerID, room):
+        # handles client disconnect by updating server based on client state
+
+        # "not ready" state: update room info
+        with self.lock:
+            if room != 0:
+                self.remove_player([playerID], room)
+
+            # playing state: reevaulates auction
+            if self.roomStatus[room] == "playing":
+                remaining = self.playerStatus.get(room)
+                if len(remaining) == 1:
+                    self.activeUsers[remaining[0]].send(
+                        ("3021 You are the winner").encode())
+                    self.remove_player(remaining, room)
+                    self.allBids = {i: {} for i in range(6)}
+            self.update_room(room)
 
 
     def parse_file(self, path):

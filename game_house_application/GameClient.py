@@ -31,40 +31,39 @@ def main():
     clientSocket.connect((serverName, serverPort))
     state = "command"
 
-    while not authenticate_user(clientSocket):
-        pass
+    try:
+        while not authenticate_user(clientSocket):
+            pass
 
-    # client in game hall
-    while True:
-        if state == "command":
-            clientSocket.send((input()).encode())
-            serverResponse = clientSocket.recv(1024).decode()
-            print(serverResponse)
-            if serverResponse.split()[0] == "3012":
-                state = "ready"
+        # client in game hall
+        while True:
+            if state == "command":
+                clientSocket.send((input()).encode())
+                serverResponse = clientSocket.recv(1024).decode()
+                print(serverResponse)
+                if serverResponse.split()[0] == "3012":
+                    state = "ready"
+                elif serverResponse.split()[0] == "4001":
+                    break
 
-        if state == "ready":
-            # block input while waiting on game start message
-            startMessage = clientSocket.recv(1024).decode()
-            print(startMessage)
-            if startMessage.split()[0] == "3013":
-                state = "playing"
+            if state == "ready":
+                # block input while waiting on game start message
+                startMessage = clientSocket.recv(1024).decode()
+                print(startMessage)
+                if startMessage.split()[0] == "3013":
+                    state = "playing"
 
-        if state == "playing":
-            termios.tcflush(sys.stdin, termios.TCIFLUSH)
-            clientSocket.send((input()).encode())
-            print(clientSocket.recv(1024).decode())
-            state = "command"
+            if state == "playing":
+                termios.tcflush(sys.stdin, termios.TCIFLUSH)
+                clientSocket.send((input()).encode())
+                print(clientSocket.recv(1024).decode())
+                state = "command"
 
+    except Exception as e:
+        print("Connection to server lost, exiting program.")
 
-
-
-
-
-
-
-
-    clientSocket.close()
+    finally:
+        clientSocket.close()
 
 if __name__ == '__main__':
     main()
