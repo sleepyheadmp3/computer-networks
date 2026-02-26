@@ -2,6 +2,7 @@
 
 from socket import *
 import sys
+import termios
 
 def authenticate_user(clientSocket):
     # sends user input credentials to server for validation
@@ -28,24 +29,33 @@ def main():
     serverPort = int(sys.argv[2])
     clientSocket = socket(AF_INET, SOCK_STREAM)
     clientSocket.connect((serverName, serverPort))
+    state = "command"
 
     while not authenticate_user(clientSocket):
         pass
 
     # client in game hall
     while True:
-        clientSocket.send((input()).encode())
-        serverResponse = clientSocket.recv(1024).decode()
-        print(serverResponse)
+        if state == "command":
+            clientSocket.send((input()).encode())
+            serverResponse = clientSocket.recv(1024).decode()
+            print(serverResponse)
+            if serverResponse.split()[0] == "3012":
+                state = "ready"
 
-        # waiting for game start
-        if serverResponse.split()[0] == "3012":
-            print(clientSocket.recv(1024).decode())                         # TODO: timeout??
-            break
-    
-    # client in auctioning state
-    clientSocket.send((input()).encode())
-    print(clientSocket.recv(1024).decode())
+        if state == "ready":
+            # block input while waiting on game start message
+            startMessage = clientSocket.recv(1024).decode()
+            print(startMessage)
+            if startMessage.split()[0] == "3013":
+                state = "playing"
+
+        if state == "playing":
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+            clientSocket.send((input()).encode())
+            print(clientSocket.recv(1024).decode())
+            state = "command"
+
 
 
 
