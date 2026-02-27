@@ -15,27 +15,25 @@ class ServerThread(threading.Thread):
         self.room = 0       # rooms use 1-indexing, 0 before joined
 
 
-    def authenticate_bid(self, connectionSocket):
+    def authenticate_bid(self, connectionSocket, room):
         # checks bid input validity, returns int bid list or empty if invalid
 
         try:
             response = connectionSocket.recv(1024).decode().split()
-            if not response:
-                return [0]
+            if self.server.is_playing(room):
+                if not response or response[0] != "/bids" or len(response) != 7:
+                    connectionSocket.send(("4002 Unrecognized message").encode())
+                    return []
 
-            if response[0] != "/bids" or len(response) != 7:
-                connectionSocket.send(("4002 Unrecognized message").encode())
-                return []
+                response.pop(0)
+                bidList = [int(x) for x in response]
+                if sum(bidList) > 30 or any(x < 0 for x in bidList):
+                    connectionSocket.send(("3022 You lost this game").encode())
+                    return []
 
-            response.pop(0)
-            bidList = [int(x) for x in response]
-            if sum(bidList) > 30 or any(x < 0 for x in bidList):
-                connectionSocket.send(("3022 You lost this game").encode())
-                return []
-
-            return bidList
+                return bidList
         except Exception as e:
-            return [0]
+            return []
 
 
     def run(self):
@@ -84,11 +82,11 @@ class ServerThread(threading.Thread):
                             self.room = roomNumber
                             connectionSocket.send((
                                 "3011 In room, not ready").encode())
-                            print(self.playerID, "entered room", roomNumber, ".")
+                            print(f"{self.playerID} entered room {roomNumber}.")
                         elif code == 3014:
                             connectionSocket.send((
                                 "3014 The room is playing a game").encode())
-                            print("Room entry rejected.")
+                            print("Failed room entry attempt.")
                         else:
                             connectionSocket.send((
                                 "4002 Unrecognized message").encode())
@@ -105,19 +103,17 @@ class ServerThread(threading.Thread):
                         # wait for game to start
 
                         # player enters "playing" state
-                        bidList = self.authenticate_bid(connectionSocket)
+                        bidList = self.authenticate_bid(
+                            connectionSocket, self.room)
                         if bidList:
                             self.server.submit_bid(
                                 bidList, self.playerID, self.room)
-                        elif bidList == [0]:
-                            self.server.disconnect(self.playerID, self.room)
                         else:
-                            self.server.remove_player(
-                                [self.playerID], self.room)
+                            self.server.disconnect(self.playerID, self.room)
 
                         self.room = 0
 
-                    elif command == "/exit":
+                    elif command == "/exit" and self.room == 0:
                         connectionSocket.send(("4001 Bye bye").encode())
 
                     else:
@@ -127,10 +123,11 @@ class ServerThread(threading.Thread):
                     connectionSocket.send((
                         "4002 Unrecognized message").encode())
 
-        except (ConnectionResetError, BrokenPipeError) as e:
+        except (ConnectionResetError, BrokenPipeError, KeyError,
+                KeyboardInterrupt) as e:
             self.server.disconnect(self.playerID, self.room)
             print(f"Connection error from client {addr}, "
-                  f" may have disconnected forcibly: {e}")
+                  f"may have disconnected forcibly: {e}")
 
         except Exception as e:
             self.server.disconnect(self.playerID, self.room)
@@ -161,9 +158,9 @@ class ServerMain:
         with self.lock:
             roomMembers = self.playerStatus.get(room)
             for player in playerList:
-                roomMembers.pop(player)
-                self.activeUsers.pop(player)
-            print("after removing: ", self.playerStatus.get(room))                              # debug
+                if player in roomMembers:
+                    roomMembers.pop(player)
+                    self.activeUsers.pop(player)
 
 
     def submit_bid(self, playerBids, playerID, room):
@@ -176,7 +173,6 @@ class ServerMain:
 
             # if all player bids submitted, calculate winner
             if len(self.allBids.get(0)) == len(self.playerStatus.get(room)):
-                print("calculating winner")
                 wins = {player: 0 for player in self.allBids.get(0).keys()}
                 for i in range(6):
                     current = self.allBids.get(i)
@@ -200,15 +196,20 @@ class ServerMain:
                 for player in losers:
                     self.activeUsers.get(player).send((
                         "3022 You lost this game").encode())
-                print(f"Losers: {losers}")                                            # DEBUG
 
                 # clears room and resets bid data
                 self.remove_player(gameWinners, room)
                 self.remove_player(losers, room)
                 self.roomStatus[room] = "available"
-                print(f"Active users: {list(self.activeUsers)}")                     # DEBUG
-                print(f"Room statuses: {self.roomStatus}")                          # DEBUG
                 self.allBids = {i: {} for i in range(6)}
+
+
+    def is_playing(self, room):
+        with self.lock:
+            if self.roomStatus[room] == "playing":
+                return True
+            else:
+                return False
 
 
     def update_room(self, room):
@@ -262,6 +263,7 @@ class ServerMain:
 
         return roomsData
 
+
     def disconnect(self, playerID, room):
         # handles client disconnect by updating server based on client state
 
@@ -270,15 +272,15 @@ class ServerMain:
             if room != 0:
                 self.remove_player([playerID], room)
 
-            # playing state: reevaulates auction
-            if self.roomStatus[room] == "playing":
-                remaining = self.playerStatus.get(room)
-                if len(remaining) == 1:
-                    self.activeUsers[remaining[0]].send(
-                        ("3021 You are the winner").encode())
-                    self.remove_player(remaining, room)
-                    self.allBids = {i: {} for i in range(6)}
-            self.update_room(room)
+                # playing state: reevaulates auction
+                if self.roomStatus[room] == "playing":
+                    remaining = list(self.playerStatus.get(room).keys())
+                    if len(remaining) == 1:
+                        self.activeUsers[remaining[0]].send(
+                            ("3021 You are the winner").encode())
+                        self.remove_player(remaining, room)
+                        self.allBids = {i: {} for i in range(6)}
+                self.update_room(room)
 
 
     def parse_file(self, path):

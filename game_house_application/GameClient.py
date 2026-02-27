@@ -37,6 +37,7 @@ def main():
 
         # client in game hall
         while True:
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
             if state == "command":
                 clientSocket.send((input()).encode())
                 serverResponse = clientSocket.recv(1024).decode()
